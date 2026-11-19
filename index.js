@@ -41,6 +41,7 @@ app.get("/users", async (req, res)=>{
 })
 
 
+
 //tuition related apis
 
 app.post("/tuitions", async (req, res) => {
@@ -63,6 +64,15 @@ app.post("/tuitions", async (req, res) => {
     });
   }
 });
+
+
+
+app.get("/tuitions",async (req, res)=>{
+  const cursor = tuitions.find();
+  const result = await cursor.toArray();
+
+  res.send(result);
+})
 
 app.listen(port, ()=>{
     console.log(`mentorlagbe is running on port ${port}`)
