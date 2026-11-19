@@ -86,7 +86,7 @@ app.delete('/tuitions/:id', async (req, res)=>{
 })
 
 
-//update tuition
+//update tuition.
 app.put("/tuitions/:id", async (req, res) => {
   const id = req.params.id;
   const updatedData = req.body;
