@@ -1,6 +1,6 @@
 import express from 'express';
 import cors from 'cors';
-import { MongoClient } from 'mongodb';
+import { MongoClient, ObjectId } from 'mongodb';
 import 'dotenv/config';
 
 
@@ -74,6 +74,38 @@ app.get("/tuitions",async (req, res)=>{
   res.send(result);
 })
 
+
+//tuition details 
+app.get("/tuitions/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({
+        message: "Invalid tuition ID",
+      });
+    }
+
+    const query = {
+      _id: new ObjectId(id),
+    };
+
+    const result = await tuitions.findOne(query);
+
+    if (!result) {
+      return res.status(404).send({
+        message: "Tuition not found",
+      });
+    }
+
+    res.send(result);
+  } catch (error) {
+    console.error(error);
+    res.status(500).send({
+      message: "Failed to fetch tuition",
+    });
+  }
+});
 
 
 //delete tuition
