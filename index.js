@@ -74,6 +74,32 @@ app.get("/tuitions",async (req, res)=>{
   res.send(result);
 })
 
+
+
+//delete tuition
+app.delete('/tuitions/:id', async (req, res)=>{
+
+  const id = req.params.id;
+  const query = {_id: new ObjectId(id)};
+  const result = await jobs.deleteOne(query);
+  res.send(result);
+})
+
+
+//update tuition
+app.put("/tuitions/:id", async (req, res) => {
+  const id = req.params.id;
+  const updatedData = req.body;
+
+  const result = await tuitions.updateOne(
+    { _id: new ObjectId(id) },
+    { $set: updatedData }
+  );
+
+  res.send(result);
+});
+
+
 app.listen(port, ()=>{
     console.log(`mentorlagbe is running on port ${port}`)
 })
