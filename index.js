@@ -26,7 +26,7 @@ export async function connectToMongoDB() {
 const connectedClient = await connectToMongoDB();
 const database = client.db("mentorlagbe")
 const users = database.collection("user")
-const tutions = database.collection("tutions")
+const tuitions = database.collection("tuitions")
 
 
 app.get("/", (req, res)=>{
@@ -39,6 +39,30 @@ app.get("/users", async (req, res)=>{
     const result = await cursor.toArray();
     res.send(result)
 })
+
+
+//tuition related apis
+
+app.post("/tuitions", async (req, res) => {
+  try {
+    const tuitionData = req.body;
+
+    const result = await tuitions.insertOne(tuitionData);
+
+    res.status(201).send({
+      success: true,
+      message: "Tuition posted successfully",
+      insertedId: result.insertedId,
+    });
+  } catch (error) {
+    console.error("Tuition posting error:", error);
+
+    res.status(500).send({
+      success: false,
+      message: "Failed to post tuition",
+    });
+  }
+});
 
 app.listen(port, ()=>{
     console.log(`mentorlagbe is running on port ${port}`)
