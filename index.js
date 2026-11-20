@@ -27,6 +27,7 @@ const connectedClient = await connectToMongoDB();
 const database = client.db("mentorlagbe")
 const users = database.collection("user")
 const tuitions = database.collection("tuitions")
+const applications = database.collection("appliactions")
 
 
 app.get("/", (req, res)=>{
@@ -106,6 +107,14 @@ app.get("/tuitions/:id", async (req, res) => {
     });
   }
 });
+
+
+
+app.post("/applications", async (req, res)=>{
+  const application = req.body;
+  const result = await applications.insertOne(application);
+  res.send(result);
+})
 
 
 //delete tuition
