@@ -143,13 +143,19 @@ app.get("/applications", async (req, res) => {
 
 // Application Count
 app.get("/applications/count", async (req, res) => {
-  const userId = req.query.userId;
+  try {
+    const applicantId = req.query.applicantId;
 
-  const query = userId ? { userId: userId } : {};
+    const count = await applications.countDocuments({
+      userId: applicantId,
+    });
 
-  const count = await applications.countDocuments(query);
-
-  res.send({ count });
+    res.send({ count });
+  } catch (error) {
+    res.status(500).send({
+      message: "Failed to get application count",
+    });
+  }
 });
 
 
