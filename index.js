@@ -68,12 +68,24 @@ app.post("/tuitions", async (req, res) => {
 
 
 
-app.get("/tuitions",async (req, res)=>{
-  const cursor = tuitions.find();
-  const result = await cursor.toArray();
+//all tuitions 
 
-  res.send(result);
-})
+app.get("/tuitions", async (req, res) => {
+  try {
+    const result = await tuitions
+      .find({})
+      .sort({ _id: -1 })
+      .toArray();
+
+    res.status(200).send(result);
+  } catch (error) {
+    console.error("Fetch tuitions error:", error);
+
+    res.status(500).send({
+      message: "Failed to fetch tuitions",
+    });
+  }
+});
 
 
 //tuition details 
@@ -180,6 +192,91 @@ app.get("/applications", async (req, res) => {
 });
 
 
+
+//applicant by user email 
+// Get applicants for a tutor
+app.get("/applications/tutor/:email", async (req, res) => {
+  try {
+    const tutorEmail = decodeURIComponent(req.params.email);
+
+    console.log("Tutor Email:", tutorEmail);
+
+    const result = await applications.aggregate([
+      // Convert tuitionId string to ObjectId
+      {
+        $addFields: {
+          tuitionObjectId: {
+            $convert: {
+              input: "$tuitionId",
+              to: "objectId",
+              onError: null,
+              onNull: null,
+            },
+          },
+        },
+      },
+
+      // Find related tuition
+      {
+        $lookup: {
+          from: "tuitions",
+          localField: "tuitionObjectId",
+          foreignField: "_id",
+          as: "tuition",
+        },
+      },
+
+      {
+        $unwind: {
+          path: "$tuition",
+          preserveNullAndEmptyArrays: false,
+        },
+      },
+
+      // Match tutor email
+      {
+        $match: {
+          "tuition.tutorEmail": tutorEmail,
+        },
+      },
+
+      // Add tuition information
+      {
+        $addFields: {
+          tuitionTitle: "$tuition.title",
+          classLevel: "$tuition.classLevel",
+        },
+      },
+
+      // Remove unnecessary fields
+      {
+        $project: {
+          tuition: 0,
+          tuitionObjectId: 0,
+        },
+      },
+
+      {
+        $sort: {
+          appliedDate: -1,
+          _id: -1,
+        },
+      },
+    ]).toArray();
+
+    console.log("Total Applicants:", result.length);
+
+    res.status(200).send(result);
+  } catch (error) {
+    console.error("Applicants fetch error:", error);
+
+    res.status(500).send({
+      message: "Failed to fetch applicants",
+    });
+  }
+});
+
+
 app.get("/applications/:id", async (req, res) => {
   try {
     const id = req.params.id;
@@ -217,60 +314,87 @@ app.get("/applications/:id", async (req, res) => {
 
 
 //cancel/delete a pending application
-app.delete("/applications/:id", async (req, res) => {
+app.patch("/tuitions/:id/status", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { approvalStatus } = req.body;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({
+        message: "Invalid tuition ID",
+      });
+    }
+
+    const allowedStatus = ["pending", "approved", "rejected"];
+
+    if (!allowedStatus.includes(approvalStatus)) {
+      return res.status(400).send({
+        message: "Invalid approval status",
+      });
+    }
+
+    const result = await tuitions.updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: {
+          approvalStatus,
+          updatedAt: new Date(),
+        },
+      }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).send({
+        message: "Tuition not found",
+      });
+    }
+
+    res.send({
+      success: true,
+      message: `Tuition ${approvalStatus} successfully`,
+    });
+  } catch (error) {
+    console.error("Update status error:", error);
+
+    res.status(500).send({
+      message: "Failed to update tuition status",
+    });
+  }
+});
+
+//delete tuition
+app.delete("/tuitions/:id", async (req, res) => {
   try {
     const id = req.params.id;
 
     if (!ObjectId.isValid(id)) {
       return res.status(400).send({
-        message: "Invalid application ID",
+        message: "Invalid tuition ID",
       });
     }
 
-    const { userId } = req.query;
-    const query = { _id: new ObjectId(id) };
+    const result = await tuitions.deleteOne({
+      _id: new ObjectId(id),
+    });
 
-    if (userId) {
-      query.userId = userId;
-    }
-
-    const application = await applications.findOne(query);
-
-    if (!application) {
+    if (result.deletedCount === 0) {
       return res.status(404).send({
-        message: "Application not found",
+        message: "Tuition not found",
       });
     }
 
-    const status = String(application.status || "Pending").toLowerCase();
-
-    if (status !== "pending") {
-      return res.status(409).send({
-        message: "Only pending applications can be cancelled",
-      });
-    }
-
-    const result = await applications.deleteOne(query);
-
-    res.send(result);
+    res.send({
+      success: true,
+      message: "Tuition deleted successfully",
+    });
   } catch (error) {
-    console.error("Application cancel error:", error);
+    console.error("Delete tuition error:", error);
 
     res.status(500).send({
-      message: "Failed to cancel application",
+      message: "Failed to delete tuition",
     });
   }
 });
-
-
-//delete tuition
-app.delete('/tuitions/:id', async (req, res)=>{
-
-  const id = req.params.id;
-  const query = {_id: new ObjectId(id)};
-  const result = await jobs.deleteOne(query);
-  res.send(result);
-})
 
 
 //update tuition.
