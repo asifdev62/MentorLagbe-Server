@@ -23,6 +23,13 @@ const users = database.collection("user");
 const tuitions = database.collection("tuitions");
 const applications = database.collection("applications");
 
+// Escape user input before building a case-insensitive RegExp
+const escapeRegex = (value) =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const buildEmailRegex = (email) =>
+  new RegExp(`^${escapeRegex(email)}$`, "i");
+
 
 // Home API
 app.get("/", (req, res) => {
@@ -49,10 +56,26 @@ app.post("/tuitions", async (req, res) => {
 });
 
 
-// Get All Tuitions
+// Get All Tuitions (optionally filter by user, tutor email or approval status)
 app.get("/tuitions", async (req, res) => {
+  const { userId, tutorEmail, approvalStatus } = req.query;
+
+  const query = {};
+
+  if (userId) {
+    query.userId = userId;
+  }
+
+  if (tutorEmail) {
+    query.tutorEmail = tutorEmail;
+  }
+
+  if (approvalStatus) {
+    query.approvalStatus = approvalStatus;
+  }
+
   const result = await tuitions
-    .find()
+    .find(query)
     .sort({ _id: -1 })
     .toArray();
 
@@ -121,7 +144,25 @@ app.delete("/tuitions/:id", async (req, res) => {
 
 // Post Application
 app.post("/applications", async (req, res) => {
-  const application = req.body;
+  const application = { ...req.body };
+
+  // Make sure the application is linked to the tuition's tutor even if
+  // an older client did not send tutorEmail / tutorId.
+  try {
+    if (application.tuitionId) {
+      const tuition = await tuitions.findOne({
+        _id: new ObjectId(application.tuitionId),
+      });
+
+      if (tuition) {
+        application.tutorEmail =
+          application.tutorEmail || tuition.tutorEmail;
+        application.tutorId = application.tutorId || tuition.userId;
+      }
+    }
+  } catch {
+    // Ignore invalid tuition ids and keep the application as-is.
+  }
 
   const result = await applications.insertOne(application);
 
@@ -160,14 +201,49 @@ app.get("/applications/count", async (req, res) => {
 
 
 // Get Applicants by Tutor Email
+// An application belongs to a tutor if:
+//  - its tutorEmail matches the tutor, or
+//  - its tuitionId belongs to a tuition posted by that tutor.
 app.get("/applications/tutor/:email", async (req, res) => {
-  const email = decodeURIComponent(req.params.email);
+  try {
+    const email = decodeURIComponent(req.params.email || "").trim();
 
-  const result = await applications.find({
-    tutorEmail: email,
-  }).toArray();
+    if (!email) {
+      return res.send([]);
+    }
 
-  res.send(result);
+    const emailRegex = buildEmailRegex(email);
+
+    const tutor = await users.findOne({ email: emailRegex });
+
+    const tuitionFilters = [{ tutorEmail: emailRegex }];
+
+    if (tutor) {
+      tuitionFilters.push({ userId: tutor._id.toString() });
+      tuitionFilters.push({ userId: tutor._id });
+    }
+
+    const tutorTuitions = await tuitions
+      .find({ $or: tuitionFilters }, { projection: { _id: 1 } })
+      .toArray();
+
+    const tuitionIds = tutorTuitions.map((item) => item._id.toString());
+
+    const result = await applications
+      .find({
+        $or: [
+          { tutorEmail: emailRegex },
+          { tuitionId: { $in: tuitionIds } },
+        ],
+      })
+      .toArray();
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({
+      message: "Failed to fetch applicants",
+    });
+  }
 });
 
 
@@ -199,21 +275,41 @@ app.delete("/applications/:id", async (req, res) => {
 });
 
 
-//update application status
+// Update application status (Pending / Accepted / Rejected)
 app.patch("/applications/:id/status", async (req, res) => {
   const id = req.params.id;
-  const { status } = req.body;
+  const { status } = req.body || {};
 
-  const result = await applications.updateOne(
-    { _id: new ObjectId(id) },
-    {
-      $set: {
-        status: status,
-      },
-    }
-  );
+  const allowedStatuses = ["Pending", "Accepted", "Rejected"];
 
-  res.send(result);
+  const normalizedStatus =
+    typeof status === "string" && status.trim()
+      ? status.trim().charAt(0).toUpperCase() +
+        status.trim().slice(1).toLowerCase()
+      : "";
+
+  if (!allowedStatuses.includes(normalizedStatus)) {
+    return res.status(400).send({
+      message: "Invalid application status",
+    });
+  }
+
+  try {
+    const result = await applications.updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: {
+          status: normalizedStatus,
+        },
+      }
+    );
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({
+      message: "Failed to update application status",
+    });
+  }
 });
 
 
