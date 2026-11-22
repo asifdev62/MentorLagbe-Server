@@ -349,57 +349,178 @@ app.patch("/users/:id", async (req, res) => {
 
 
 //payments releted apis
-app.post("/payment/checkout-verify", async(req, res)=>{
-  const {sessionId} = req.body;
+app.post("/payment/checkout-verify", async (req, res) => {
+  const { sessionId } = req.body;
 
-  if (!sessionId){
-    return res.send({success: false, message: "Session ID is required"});
-  }
-  const {
-    status,
-    payment_email,
-    customer_email,
-    metadata,
-    payment_intent,
-  }= await stripe.checkout.sessions.retrieve(sessionId);
-
-  if(status === "complete" && payment_status === "paid"){
-
-  const sessionQuery = {sessionId};
-  const existingPayment = await payments.findOne(sessionQuery);
-  
-  if(existingPayment){
-    return res.send({success: false, message: "payment already verified"});
+  if (!sessionId) {
+    return res.status(400).send({
+      success: false,
+      message: "Session ID is required",
+    });
   }
 
-     const payment={
-    sessionId,
-    status,
-    payment_status,
-    customer_email,
-    userid: metadata.userId,
-    payment_intent,
-    payment_date: new Date(),
-  }
-  const result = await payments.insertOne(payment);
+  try {
+    const session = await stripe.checkout.sessions.retrieve(sessionId, {
+      expand: ["line_items.data.price.product"],
+    });
 
-  const query = {_id: new ObjectId(metadata.userId)};
+    const {
+      status,
+      payment_status,
+      customer_details,
+      customer_email,
+      metadata,
+      payment_intent,
+      amount_total,
+      currency,
+      mode,
+    } = session;
 
-  const updatedDoc = {
-    $set:{
-      premium: true,
+    if (status !== "complete" || payment_status !== "paid") {
+      return res.send({
+        success: false,
+        message: "Payment verification failed",
+      });
     }
-  }
-    const updateResult = await users.updateOne(
-      {_id: new ObjectId(metadata.userId)},
-      updatedDoc
-    );
-    res.send({success: true, result, updateResult})
-    return
-  }
 
-  res.send({success: false, message: "payment verification faild"});
-})
+    // Idempotent: refreshing the success page must not create duplicates.
+    const existingPayment = await payments.findOne({ sessionId });
+
+    if (existingPayment) {
+      return res.send({
+        success: true,
+        alreadyVerified: true,
+        message: "Payment already verified",
+      });
+    }
+
+    const plan = metadata?.plan === "tutor" ? "tutor" : "student";
+    const product = session.line_items?.data?.[0]?.price?.product;
+    const planName =
+      product && typeof product === "object" && product.name
+        ? product.name
+        : plan === "tutor"
+          ? "Tutor Pro"
+          : "Student Premium";
+
+    const payment = {
+      sessionId,
+      status,
+      payment_status,
+      customer_name: customer_details?.name || null,
+      customer_email: customer_details?.email || customer_email || null,
+      userid: metadata?.userId || null,
+      plan,
+      plan_name: planName,
+      amount_total: amount_total ?? null,
+      currency: currency || null,
+      mode: mode || null,
+      payment_intent:
+        typeof payment_intent === "string"
+          ? payment_intent
+          : payment_intent?.id || null,
+      payment_date: new Date(),
+    };
+
+    const result = await payments.insertOne(payment);
+
+    let updateResult = null;
+
+    if (metadata?.userId && ObjectId.isValid(metadata.userId)) {
+      updateResult = await users.updateOne(
+        { _id: new ObjectId(metadata.userId) },
+        {
+          $set: {
+            premium: true,
+            premiumPlan: plan,
+            premiumSince: new Date(),
+          },
+        }
+      );
+    }
+
+    res.send({ success: true, result, updateResult });
+  } catch (error) {
+    res.status(500).send({
+      success: false,
+      message: error.message || "Payment verification failed",
+    });
+  }
+});
+
+
+// Get all payment records for the admin dashboard.
+// Joins each payment with its user to include name, email and role.
+app.get("/payments", async (req, res) => {
+  try {
+    const records = await payments
+      .find()
+      .sort({ payment_date: -1, createdAt: -1 })
+      .toArray();
+
+    const userIds = [
+      ...new Set(
+        records
+          .map((payment) => payment.userid || payment.userId)
+          .filter(Boolean)
+          .map(String)
+      ),
+    ];
+
+    const objectIds = userIds
+      .filter((id) => ObjectId.isValid(id))
+      .map((id) => new ObjectId(id));
+
+    const userDocs = objectIds.length
+      ? await users.find({ _id: { $in: objectIds } }).toArray()
+      : [];
+
+    const userMap = new Map(
+      userDocs.map((user) => [user._id.toString(), user])
+    );
+
+    const result = records.map((payment) => {
+      const userId = String(payment.userid || payment.userId || "");
+      const user = userMap.get(userId);
+      const plan = payment.plan || "student";
+
+      return {
+        _id: payment._id,
+        sessionId: payment.sessionId || payment.stripeSessionId || null,
+        userId,
+        userName: user?.name || payment.customer_name || "Unknown user",
+        email:
+          user?.email || payment.customer_email || payment.email || null,
+        role: user?.role || "student",
+        plan,
+        planName:
+          payment.plan_name ||
+          (plan === "tutor" ? "Tutor Pro" : "Student Premium"),
+        amount: payment.amount_total ?? payment.amountTotal ?? null,
+        currency: payment.currency || null,
+        status: payment.payment_status || payment.status || null,
+        transactionId:
+          payment.payment_intent ||
+          payment.paymentIntentId ||
+          payment.sessionId ||
+          payment.stripeSessionId ||
+          null,
+        paymentDate:
+          payment.payment_date ||
+          payment.createdAt ||
+          payment.updatedAt ||
+          null,
+      };
+    });
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({
+      success: false,
+      message: error.message || "Failed to load payments",
+    });
+  }
+});
 
 
 
