@@ -351,6 +351,10 @@ app.patch("/users/:id", async (req, res) => {
 //payments releted apis
 app.post("/payment/checkout-verify", async(req, res)=>{
   const {sessionId} = req.body;
+
+  if (!sessionId){
+    return res.send({success: false, message: "Session ID is required"});
+  }
   const {
     status,
     payment_email,
@@ -360,6 +364,14 @@ app.post("/payment/checkout-verify", async(req, res)=>{
   }= await stripe.checkout.sessions.retrieve(sessionId);
 
   if(status === "complete" && payment_status === "paid"){
+
+  const sessionQuery = {sessionId};
+  const existingPayment = await payments.findOne(sessionQuery);
+  
+  if(existingPayment){
+    return res.send({success: false, message: "payment already verified"});
+  }
+
      const payment={
     sessionId,
     status,
