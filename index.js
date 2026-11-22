@@ -1,13 +1,13 @@
 
-import express from 'express';
-import cors from 'cors';
-import { MongoClient, ObjectId } from 'mongodb';
-import 'dotenv/config';
+import express from "express";
+import cors from "cors";
+import { MongoClient, ObjectId } from "mongodb";
+import "dotenv/config";
 import Stripe from "stripe";
 import { timingSafeEqual } from "node:crypto";
 
-
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
+
 const app = express();
 const port = process.env.PORT || 5000;
 
@@ -19,6 +19,7 @@ app.use(cors());
 const client = new MongoClient(process.env.MONGODB_URL);
 
 await client.connect();
+
 console.log("You successfully connected to MongoDB!");
 
 const database = client.db("mentorlagbe");
@@ -27,11 +28,27 @@ const users = database.collection("user");
 const tuitions = database.collection("tuitions");
 const applications = database.collection("applications");
 const payments = database.collection("payments");
+const bookmarkCollection = database.collection("bookmarks");
+
+// Create indexes
+try {
+  await applications.createIndex(
+    { tuitionId: 1, studentEmail: 1 },
+    { unique: true }
+  );
+
+  await bookmarkCollection.createIndex(
+    { tuitionId: 1, studentEmail: 1 },
+    { unique: true }
+  );
+} catch (error) {
+  console.error("Database index creation warning:", error.message);
+}
 
 // Admin API Secret
 const ADMIN_API_SECRET = process.env.ADMIN_API_SECRET;
 
-// Verify Admin API Request
+// Verify Admin / Internal API Request
 const verifyAdminApi = (req, res, next) => {
   const receivedSecret = req.headers["x-admin-api-secret"];
 
@@ -58,7 +75,6 @@ const verifyAdminApi = (req, res, next) => {
   next();
 };
 
-
 // Escape user input before building a case-insensitive RegExp
 const escapeRegex = (value) =>
   value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -66,12 +82,10 @@ const escapeRegex = (value) =>
 const buildEmailRegex = (email) =>
   new RegExp(`^${escapeRegex(email)}$`, "i");
 
-
 // Home API
 app.get("/", (req, res) => {
   res.send("Mentorlagbe is running");
 });
-
 
 // Get All Users
 app.get("/users", async (req, res) => {
@@ -79,10 +93,7 @@ app.get("/users", async (req, res) => {
   res.send(result);
 });
 
-
-
-//ADMIN USER MANAGEMENT APIs
-
+// ADMIN USER MANAGEMENT APIs
 
 // Get All Registered Users
 app.get("/admin/users", verifyAdminApi, async (req, res) => {
@@ -123,7 +134,6 @@ app.get("/admin/users", verifyAdminApi, async (req, res) => {
   }
 });
 
-
 // Update User Role
 app.patch("/admin/users/:id/role", verifyAdminApi, async (req, res) => {
   try {
@@ -160,9 +170,7 @@ app.patch("/admin/users/:id/role", verifyAdminApi, async (req, res) => {
     const result = await users.updateOne(
       { _id: new ObjectId(id) },
       {
-        $set: {
-          role,
-        },
+        $set: { role },
       }
     );
 
@@ -184,144 +192,323 @@ app.patch("/admin/users/:id/role", verifyAdminApi, async (req, res) => {
   }
 });
 
+// TUITION RELATED APIs
 
-
-// Tuition Related APIs
 // Post Tuition
 app.post("/tuitions", async (req, res) => {
-  const tuition = req.body;
+  try {
+    const tuition = req.body;
 
-  const result = await tuitions.insertOne(tuition);
+    const result = await tuitions.insertOne(tuition);
 
-  res.send(result);
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({
+      success: false,
+      message: "Failed to create tuition",
+    });
+  }
 });
 
+// Get All Approved Tuitions
+// Keep this route before /tuitions/:id
+app.get("/tuitions/approved", async (req, res) => {
+  try {
+    const result = await tuitions
+      .find({ approvalStatus: "approved" })
+      .sort({ _id: -1 })
+      .toArray();
+
+    res.send({
+      success: true,
+      tuitions: result,
+    });
+  } catch (error) {
+    res.status(500).send({
+      success: false,
+      message: "Failed to fetch approved tuitions",
+    });
+  }
+});
 
 // Get All Tuitions (optionally filter by user, tutor email or approval status)
 app.get("/tuitions", async (req, res) => {
-  const { userId, tutorEmail, approvalStatus } = req.query;
+  try {
+    const { userId, tutorEmail, approvalStatus } = req.query;
 
-  const query = {};
+    const query = {};
 
-  if (userId) {
-    query.userId = userId;
+    if (userId) {
+      query.userId = userId;
+    }
+
+    if (tutorEmail) {
+      query.tutorEmail = tutorEmail;
+    }
+
+    if (approvalStatus) {
+      query.approvalStatus = approvalStatus;
+    }
+
+    const result = await tuitions
+      .find(query)
+      .sort({ _id: -1 })
+      .toArray();
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({
+      message: "Failed to fetch tuitions",
+    });
   }
-
-  if (tutorEmail) {
-    query.tutorEmail = tutorEmail;
-  }
-
-  if (approvalStatus) {
-    query.approvalStatus = approvalStatus;
-  }
-
-  const result = await tuitions
-    .find(query)
-    .sort({ _id: -1 })
-    .toArray();
-
-  res.send(result);
 });
-
 
 // Get Single Tuition
 app.get("/tuitions/:id", async (req, res) => {
-  const id = req.params.id;
+  try {
+    const id = req.params.id;
 
-  const result = await tuitions.findOne({
-    _id: new ObjectId(id),
-  });
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({
+        success: false,
+        message: "Invalid tuition ID",
+      });
+    }
 
-  res.send(result);
+    const result = await tuitions.findOne({
+      _id: new ObjectId(id),
+    });
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({
+      message: "Failed to fetch tuition",
+    });
+  }
 });
 
+// Get Single Approved Tuition
+app.get("/approved-tuitions/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({
+        success: false,
+        message: "Invalid tuition ID",
+      });
+    }
+
+    const result = await tuitions.findOne({
+      _id: new ObjectId(id),
+      approvalStatus: "approved",
+    });
+
+    if (!result) {
+      return res.status(404).send({
+        success: false,
+        message: "Approved tuition not found",
+      });
+    }
+
+    res.send({
+      success: true,
+      tuition: result,
+    });
+  } catch (error) {
+    res.status(500).send({
+      message: "Failed to fetch tuition details",
+    });
+  }
+});
 
 // Update Tuition
 app.put("/tuitions/:id", async (req, res) => {
-  const id = req.params.id;
-  const updatedData = req.body;
+  try {
+    const id = req.params.id;
 
-  const result = await tuitions.updateOne(
-    { _id: new ObjectId(id) },
-    { $set: updatedData }
-  );
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({
+        message: "Invalid tuition ID",
+      });
+    }
 
-  res.send(result);
+    const updatedData = req.body;
+
+    const result = await tuitions.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updatedData }
+    );
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({
+      message: "Failed to update tuition",
+    });
+  }
 });
-
 
 // Update Tuition Status
 app.patch("/tuitions/:id/status", async (req, res) => {
-  const id = req.params.id;
-  const { approvalStatus } = req.body;
+  try {
+    const id = req.params.id;
+    const { approvalStatus } = req.body;
 
-  const result = await tuitions.updateOne(
-    { _id: new ObjectId(id) },
-    {
-      $set: {
-        approvalStatus: approvalStatus,
-      },
-    }
-  );
+    const result = await tuitions.updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: {
+          approvalStatus,
+        },
+      }
+    );
 
-  res.send(result);
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({
+      message: "Failed to update tuition status",
+    });
+  }
 });
-
 
 // Delete Tuition
 app.delete("/tuitions/:id", async (req, res) => {
-  const id = req.params.id;
+  try {
+    const id = req.params.id;
 
-  const result = await tuitions.deleteOne({
-    _id: new ObjectId(id),
-  });
+    const result = await tuitions.deleteOne({
+      _id: new ObjectId(id),
+    });
 
-  res.send(result);
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({
+      message: "Failed to delete tuition",
+    });
+  }
 });
 
-
-
-// Application Related APIs
+// APPLICATION RELATED APIs
 
 // Post Application
-app.post("/applications", async (req, res) => {
-  const application = { ...req.body };
-
-  // Make sure the application is linked to the tuition's tutor even if
-  // an older client did not send tutorEmail / tutorId.
+app.post("/applications", verifyAdminApi, async (req, res) => {
   try {
-    if (application.tuitionId) {
-      const tuition = await tuitions.findOne({
-        _id: new ObjectId(application.tuitionId),
+    const {
+      tuitionId,
+      studentEmail,
+      phone,
+      education,
+      institution,
+      message,
+    } = req.body;
+
+    if (!ObjectId.isValid(tuitionId)) {
+      return res.status(400).send({
+        success: false,
+        message: "Invalid tuition ID",
       });
-
-      if (tuition) {
-        application.tutorEmail =
-          application.tutorEmail || tuition.tutorEmail;
-        application.tutorId = application.tutorId || tuition.userId;
-      }
     }
-  } catch {
-    // Ignore invalid tuition ids and keep the application as-is.
+
+    if (!studentEmail) {
+      return res.status(400).send({
+        success: false,
+        message: "Student email is required",
+      });
+    }
+
+    const student = await users.findOne({
+      email: buildEmailRegex(studentEmail.trim()),
+      role: "student",
+    });
+
+    if (!student) {
+      return res.status(403).send({
+        success: false,
+        message: "Only registered students can apply",
+      });
+    }
+
+    const tuition = await tuitions.findOne({
+      _id: new ObjectId(tuitionId),
+      approvalStatus: "approved",
+    });
+
+    if (!tuition) {
+      return res.status(404).send({
+        success: false,
+        message: "Approved tuition not found",
+      });
+    }
+
+    const normalizedStudentEmail = student.email;
+
+    const existingApplication = await applications.findOne({
+      tuitionId: new ObjectId(tuitionId),
+      studentEmail: normalizedStudentEmail,
+    });
+
+    if (existingApplication) {
+      return res.status(409).send({
+        success: false,
+        message: "You have already applied for this tuition",
+      });
+    }
+
+    const application = {
+      tuitionId: new ObjectId(tuitionId),
+      tutorEmail: tuition.tutorEmail,
+      tutorId: tuition.userId || null,
+      studentEmail: normalizedStudentEmail,
+      userId: student._id.toString(),
+      studentName: student.name || "",
+      phone: phone || "",
+      education: education || "",
+      institution: institution || "",
+      message: message || "",
+      status: "pending",
+      appliedAt: new Date(),
+    };
+
+    const result = await applications.insertOne(application);
+
+    res.status(201).send({
+      success: true,
+      message: "Application submitted successfully",
+      insertedId: result.insertedId,
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).send({
+        success: false,
+        message: "You have already applied for this tuition",
+      });
+    }
+
+    console.error("Application submission error:", error);
+
+    res.status(500).send({
+      success: false,
+      message: "Failed to submit application",
+    });
   }
-
-  const result = await applications.insertOne(application);
-
-  res.send(result);
 });
-
 
 // Get All Applications (Filter by User ID)
 app.get("/applications", async (req, res) => {
-  const userId = req.query.userId;
+  try {
+    const userId = req.query.userId;
 
-  const query = userId ? { userId: userId } : {};
+    const query = userId ? { userId: userId } : {};
 
-  const result = await applications.find(query).toArray();
+    const result = await applications.find(query).toArray();
 
-  res.send(result);
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({
+      message: "Failed to fetch applications",
+    });
+  }
 });
-
 
 // Application Count
 app.get("/applications/count", async (req, res) => {
@@ -340,11 +527,7 @@ app.get("/applications/count", async (req, res) => {
   }
 });
 
-
 // Get Applicants by Tutor Email
-// An application belongs to a tutor if:
-//  - its tutorEmail matches the tutor, or
-//  - its tuitionId belongs to a tuition posted by that tutor.
 app.get("/applications/tutor/:email", async (req, res) => {
   try {
     const email = decodeURIComponent(req.params.email || "").trim();
@@ -365,7 +548,10 @@ app.get("/applications/tutor/:email", async (req, res) => {
     }
 
     const tutorTuitions = await tuitions
-      .find({ $or: tuitionFilters }, { projection: { _id: 1 } })
+      .find(
+        { $or: tuitionFilters },
+        { projection: { _id: 1 } }
+      )
       .toArray();
 
     const tuitionIds = tutorTuitions.map((item) => item._id.toString());
@@ -387,34 +573,54 @@ app.get("/applications/tutor/:email", async (req, res) => {
   }
 });
 
-
 // Get Single Application
 app.get("/applications/:id", async (req, res) => {
-  const id = req.params.id;
+  try {
+    const id = req.params.id;
 
-  const result = await applications.findOne({
-    _id: new ObjectId(id),
-  });
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({
+        message: "Invalid application ID",
+      });
+    }
 
-  res.send(result);
+    const result = await applications.findOne({
+      _id: new ObjectId(id),
+    });
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({
+      message: "Failed to fetch application",
+    });
+  }
 });
-
-
 
 // Delete Pending Application
 app.delete("/applications/:id", async (req, res) => {
-  const id = req.params.id;
-  const userId = req.query.userId;
+  try {
+    const id = req.params.id;
+    const userId = req.query.userId;
 
-  const result = await applications.deleteOne({
-    _id: new ObjectId(id),
-    userId: userId,
-    status: "Pending",
-  });
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({
+        message: "Invalid application ID",
+      });
+    }
 
-  res.send(result);
+    const result = await applications.deleteOne({
+      _id: new ObjectId(id),
+      userId: userId,
+      status: { $in: ["pending", "Pending"] },
+    });
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({
+      message: "Failed to delete application",
+    });
+  }
 });
-
 
 // Update application status (Pending / Accepted / Rejected)
 app.patch("/applications/:id/status", async (req, res) => {
@@ -436,6 +642,12 @@ app.patch("/applications/:id/status", async (req, res) => {
   }
 
   try {
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({
+        message: "Invalid application ID",
+      });
+    }
+
     const result = await applications.updateOne(
       { _id: new ObjectId(id) },
       {
@@ -453,39 +665,290 @@ app.patch("/applications/:id/status", async (req, res) => {
   }
 });
 
+// BOOKMARK RELATED APIs
 
+// Add Bookmark
+app.post("/bookmarks", verifyAdminApi, async (req, res) => {
+  try {
+    const { tuitionId, studentEmail } = req.body;
 
-//find single user by id 
-app.get("/users/:id", async (req, res) => {
-  const id = req.params.id;
-
-  const result = await users.findOne({
-    _id: new ObjectId(id),
-  });
-
-  res.send(result);
-});
-
-
-
-//update user profie
-app.patch("/users/:id", async (req, res) => {
-  const id = req.params.id;
-
-  const result = await users.updateOne(
-    { _id: new ObjectId(id) },
-    {
-      $set: req.body,
+    if (!ObjectId.isValid(tuitionId)) {
+      return res.status(400).send({
+        success: false,
+        message: "Invalid tuition ID",
+      });
     }
-  );
 
-  res.send(result);
+    if (!studentEmail) {
+      return res.status(400).send({
+        success: false,
+        message: "Student email is required",
+      });
+    }
+
+    const student = await users.findOne({
+      email: buildEmailRegex(studentEmail.trim()),
+      role: "student",
+    });
+
+    if (!student) {
+      return res.status(403).send({
+        success: false,
+        message: "Student not found",
+      });
+    }
+
+    const tuition = await tuitions.findOne({
+      _id: new ObjectId(tuitionId),
+      approvalStatus: "approved",
+    });
+
+    if (!tuition) {
+      return res.status(404).send({
+        success: false,
+        message: "Approved tuition not found",
+      });
+    }
+
+    const normalizedStudentEmail = student.email;
+
+    const existingBookmark = await bookmarkCollection.findOne({
+      studentEmail: normalizedStudentEmail,
+      tuitionId: new ObjectId(tuitionId),
+    });
+
+    if (existingBookmark) {
+      return res.status(409).send({
+        success: false,
+        message: "Tuition already bookmarked",
+      });
+    }
+
+    const bookmarkCount = await bookmarkCollection.countDocuments({
+      studentEmail: normalizedStudentEmail,
+    });
+
+    // Existing Stripe payment system:
+    // Student Pro = premium: true + premiumPlan: "student"
+    const isPro =
+      student.premium === true &&
+      student.premiumPlan === "student";
+
+    // Support optional subscription field if used in future
+    const hasProSubscription =
+      student.subscription === "pro";
+
+    if (!isPro && !hasProSubscription && bookmarkCount >= 5) {
+      return res.status(403).send({
+        success: false,
+        message: "Free students can bookmark only 5 tuitions. Upgrade to Pro.",
+        limit: 5,
+        currentCount: bookmarkCount,
+      });
+    }
+
+    const result = await bookmarkCollection.insertOne({
+      studentEmail: normalizedStudentEmail,
+      userId: student._id.toString(),
+      tuitionId: new ObjectId(tuitionId),
+      createdAt: new Date(),
+    });
+
+    res.status(201).send({
+      success: true,
+      message: "Tuition bookmarked successfully",
+      insertedId: result.insertedId,
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).send({
+        success: false,
+        message: "Tuition already bookmarked",
+      });
+    }
+
+    console.error("Bookmark error:", error);
+
+    res.status(500).send({
+      success: false,
+      message: "Failed to bookmark tuition",
+    });
+  }
 });
 
+// Get Student Bookmarks
+app.get("/bookmarks", verifyAdminApi, async (req, res) => {
+  try {
+    const { studentEmail } = req.query;
 
+    if (!studentEmail || typeof studentEmail !== "string") {
+      return res.status(400).send({
+        success: false,
+        message: "Student email is required",
+      });
+    }
 
+    const student = await users.findOne({
+      email: buildEmailRegex(studentEmail.trim()),
+      role: "student",
+    });
 
-//payments releted apis
+    if (!student) {
+      return res.status(404).send({
+        success: false,
+        message: "Student not found",
+      });
+    }
+
+    const bookmarks = await bookmarkCollection
+      .aggregate([
+        {
+          $match: {
+            studentEmail: student.email,
+          },
+        },
+        {
+          $lookup: {
+            from: "tuitions",
+            localField: "tuitionId",
+            foreignField: "_id",
+            as: "tuition",
+          },
+        },
+        {
+          $unwind: {
+            path: "$tuition",
+            preserveNullAndEmptyArrays: false,
+          },
+        },
+        {
+          $sort: {
+            createdAt: -1,
+          },
+        },
+      ])
+      .toArray();
+
+    res.send({
+      success: true,
+      bookmarks,
+      count: bookmarks.length,
+      isPro:
+        student.premium === true &&
+        student.premiumPlan === "student",
+      limit:
+        student.premium === true &&
+        student.premiumPlan === "student"
+          ? null
+          : 5,
+    });
+  } catch (error) {
+    console.error("Get bookmarks error:", error);
+
+    res.status(500).send({
+      success: false,
+      message: "Failed to fetch bookmarks",
+    });
+  }
+});
+
+// Remove Bookmark
+app.delete("/bookmarks/:tuitionId", verifyAdminApi, async (req, res) => {
+  try {
+    const { tuitionId } = req.params;
+    const { studentEmail } = req.body;
+
+    if (!ObjectId.isValid(tuitionId)) {
+      return res.status(400).send({
+        success: false,
+        message: "Invalid tuition ID",
+      });
+    }
+
+    if (!studentEmail) {
+      return res.status(400).send({
+        success: false,
+        message: "Student email is required",
+      });
+    }
+
+    const student = await users.findOne({
+      email: buildEmailRegex(studentEmail.trim()),
+      role: "student",
+    });
+
+    if (!student) {
+      return res.status(404).send({
+        success: false,
+        message: "Student not found",
+      });
+    }
+
+    const result = await bookmarkCollection.deleteOne({
+      studentEmail: student.email,
+      tuitionId: new ObjectId(tuitionId),
+    });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).send({
+        success: false,
+        message: "Bookmark not found",
+      });
+    }
+
+    res.send({
+      success: true,
+      message: "Bookmark removed successfully",
+    });
+  } catch (error) {
+    console.error("Remove bookmark error:", error);
+
+    res.status(500).send({
+      success: false,
+      message: "Failed to remove bookmark",
+    });
+  }
+});
+
+// Find Single User by ID
+app.get("/users/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+
+    const result = await users.findOne({
+      _id: new ObjectId(id),
+    });
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({
+      message: "Failed to find user",
+    });
+  }
+});
+
+// Update User Profile
+app.patch("/users/:id", async (req, res) => {
+  try {
+    const id = req.params.id;
+
+    const result = await users.updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: req.body,
+      }
+    );
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({
+      message: "Failed to update user profile",
+    });
+  }
+});
+
+// PAYMENT RELATED APIs
+
 app.post("/payment/checkout-verify", async (req, res) => {
   const { sessionId } = req.body;
 
@@ -532,7 +995,9 @@ app.post("/payment/checkout-verify", async (req, res) => {
     }
 
     const plan = metadata?.plan === "tutor" ? "tutor" : "student";
+
     const product = session.line_items?.data?.[0]?.price?.product;
+
     const planName =
       product && typeof product === "object" && product.name
         ? product.name
@@ -585,9 +1050,7 @@ app.post("/payment/checkout-verify", async (req, res) => {
   }
 });
 
-
 // Get all payment records for the admin dashboard.
-// Joins each payment with its user to include name, email and role.
 app.get("/payments", async (req, res) => {
   try {
     const records = await payments
@@ -658,9 +1121,6 @@ app.get("/payments", async (req, res) => {
     });
   }
 });
-
-
-
 
 // Start Server
 app.listen(port, () => {
