@@ -3,7 +3,10 @@ import express from 'express';
 import cors from 'cors';
 import { MongoClient, ObjectId } from 'mongodb';
 import 'dotenv/config';
+import Stripe from "stripe";
 
+
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const app = express();
 const port = process.env.PORT || 5000;
 
@@ -22,6 +25,7 @@ const database = client.db("mentorlagbe");
 const users = database.collection("user");
 const tuitions = database.collection("tuitions");
 const applications = database.collection("applications");
+const payments = database.collection("payments");
 
 // Escape user input before building a case-insensitive RegExp
 const escapeRegex = (value) =>
@@ -340,6 +344,53 @@ app.patch("/users/:id", async (req, res) => {
 
   res.send(result);
 });
+
+
+
+
+//payments releted apis
+app.post("/payment/checkout-verify", async(req, res)=>{
+  const {sessionId} = req.body;
+  const {
+    status,
+    payment_email,
+    customer_email,
+    metadata,
+    payment_intent,
+  }= await stripe.checkout.sessions.retrieve(sessionId);
+
+  if(status === "complete" && payment_status === "paid"){
+     const payment={
+    sessionId,
+    status,
+    payment_status,
+    customer_email,
+    userid: metadata.userId,
+    payment_intent,
+    payment_date: new Date(),
+  }
+  const result = await payments.insertOne(payment);
+
+  const query = {_id: new ObjectId(metadata.userId)};
+
+  const updatedDoc = {
+    $set:{
+      premium: true,
+    }
+  }
+    const updateResult = await users.updateOne(
+      {_id: new ObjectId(metadata.userId)},
+      updatedDoc
+    );
+    res.send({success: true, result, updateResult})
+    return
+  }
+
+  res.send({success: false, message: "payment verification faild"});
+})
+
+
+
 
 // Start Server
 app.listen(port, () => {
