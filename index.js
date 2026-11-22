@@ -4,6 +4,7 @@ import cors from 'cors';
 import { MongoClient, ObjectId } from 'mongodb';
 import 'dotenv/config';
 import Stripe from "stripe";
+import { timingSafeEqual } from "node:crypto";
 
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
@@ -27,6 +28,37 @@ const tuitions = database.collection("tuitions");
 const applications = database.collection("applications");
 const payments = database.collection("payments");
 
+// Admin API Secret
+const ADMIN_API_SECRET = process.env.ADMIN_API_SECRET;
+
+// Verify Admin API Request
+const verifyAdminApi = (req, res, next) => {
+  const receivedSecret = req.headers["x-admin-api-secret"];
+
+  if (!ADMIN_API_SECRET || typeof receivedSecret !== "string") {
+    return res.status(401).send({
+      success: false,
+      message: "Unauthorized access",
+    });
+  }
+
+  const received = Buffer.from(receivedSecret);
+  const expected = Buffer.from(ADMIN_API_SECRET);
+
+  if (
+    received.length !== expected.length ||
+    !timingSafeEqual(received, expected)
+  ) {
+    return res.status(401).send({
+      success: false,
+      message: "Invalid API credentials",
+    });
+  }
+
+  next();
+};
+
+
 // Escape user input before building a case-insensitive RegExp
 const escapeRegex = (value) =>
   value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -45,6 +77,111 @@ app.get("/", (req, res) => {
 app.get("/users", async (req, res) => {
   const result = await users.find().toArray();
   res.send(result);
+});
+
+
+
+//ADMIN USER MANAGEMENT APIs
+
+
+// Get All Registered Users
+app.get("/admin/users", verifyAdminApi, async (req, res) => {
+  try {
+    const result = await users
+      .find(
+        {},
+        {
+          projection: {
+            name: 1,
+            email: 1,
+            image: 1,
+            role: 1,
+            createdAt: 1,
+          },
+        }
+      )
+      .sort({ _id: -1 })
+      .toArray();
+
+    const formattedUsers = result.map((user) => ({
+      ...user,
+      _id: user._id.toString(),
+      role: user.role || "student",
+    }));
+
+    res.status(200).send({
+      success: true,
+      users: formattedUsers,
+    });
+  } catch (error) {
+    console.error("Admin users fetch error:", error);
+
+    res.status(500).send({
+      success: false,
+      message: "Failed to fetch users",
+    });
+  }
+});
+
+
+// Update User Role
+app.patch("/admin/users/:id/role", verifyAdminApi, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { role } = req.body;
+
+    const allowedRoles = ["student", "tutor", "admin"];
+
+    if (!ObjectId.isValid(id)) {
+      return res.status(400).send({
+        success: false,
+        message: "Invalid user ID",
+      });
+    }
+
+    if (!allowedRoles.includes(role)) {
+      return res.status(400).send({
+        success: false,
+        message: "Invalid role",
+      });
+    }
+
+    const existingUser = await users.findOne({
+      _id: new ObjectId(id),
+    });
+
+    if (!existingUser) {
+      return res.status(404).send({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    const result = await users.updateOne(
+      { _id: new ObjectId(id) },
+      {
+        $set: {
+          role,
+        },
+      }
+    );
+
+    res.status(200).send({
+      success: true,
+      message:
+        result.modifiedCount > 0
+          ? "User role updated successfully"
+          : "Role is already up to date",
+      role,
+    });
+  } catch (error) {
+    console.error("Admin role update error:", error);
+
+    res.status(500).send({
+      success: false,
+      message: "Failed to update user role",
+    });
+  }
 });
 
 
