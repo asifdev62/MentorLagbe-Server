@@ -391,15 +391,15 @@ app.delete("/tuitions/:id", async (req, res) => {
 // APPLICATION RELATED APIs
 
 // Post Application
+
 app.post("/applications", verifyAdminApi, async (req, res) => {
   try {
     const {
       tuitionId,
       studentEmail,
       phone,
-      education,
-      institution,
-      message,
+      preferredSchedule,
+      note,
     } = req.body;
 
     if (!ObjectId.isValid(tuitionId)) {
@@ -440,11 +440,9 @@ app.post("/applications", verifyAdminApi, async (req, res) => {
       });
     }
 
-    const normalizedStudentEmail = student.email;
-
     const existingApplication = await applications.findOne({
       tuitionId: new ObjectId(tuitionId),
-      studentEmail: normalizedStudentEmail,
+      studentEmail: student.email,
     });
 
     if (existingApplication) {
@@ -456,22 +454,28 @@ app.post("/applications", verifyAdminApi, async (req, res) => {
 
     const application = {
       tuitionId: new ObjectId(tuitionId),
+      tuitionTitle: tuition.tuitionTitle || "",
+      classLevel: tuition.classLevel || "",
       tutorEmail: tuition.tutorEmail,
       tutorId: tuition.userId || null,
-      studentEmail: normalizedStudentEmail,
+
+      studentEmail: student.email,
+      email: student.email,
       userId: student._id.toString(),
       studentName: student.name || "",
+
       phone: phone || "",
-      education: education || "",
-      institution: institution || "",
-      message: message || "",
-      status: "pending",
+      preferredSchedule: preferredSchedule || "",
+      note: note || "",
+
+      status: "Pending",
+      appliedDate: new Date(),
       appliedAt: new Date(),
     };
 
     const result = await applications.insertOne(application);
 
-    res.status(201).send({
+    return res.status(201).send({
       success: true,
       message: "Application submitted successfully",
       insertedId: result.insertedId,
@@ -486,12 +490,13 @@ app.post("/applications", verifyAdminApi, async (req, res) => {
 
     console.error("Application submission error:", error);
 
-    res.status(500).send({
+    return res.status(500).send({
       success: false,
       message: "Failed to submit application",
     });
   }
 });
+
 
 // Get All Applications (Filter by User ID)
 app.get("/applications", async (req, res) => {
